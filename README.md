@@ -134,6 +134,8 @@ dbt docs serve         # l'ouvre dans le navigateur
 
 Lancez toujours dbt avec `FINTRACK_ROLE`, pas avec `ACCOUNTADMIN` : les objets créés appartiendraient à `ACCOUNTADMIN` et `FINTRACK_ROLE` ne pourrait plus les remplacer.
 
+![DBT Docs](assets/overview.png)
+
 ## Les modèles
 
 | Modèle | Contenu |
