@@ -1,0 +1,14 @@
+
+target/
+dbt_packages/
+logs/
+.env
+
+# Secrets et fichiers locaux : ne jamais versionner
+profiles.yml
+.user.yml
+*.p8
+*.pem
+.venv/
+venv/
+.DS_Store
