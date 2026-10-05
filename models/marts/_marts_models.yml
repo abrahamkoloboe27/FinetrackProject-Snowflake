@@ -1,0 +1,212 @@
+version: 2
+
+models:
+  - name: dim_comptes
+    description: >
+      Dimension des comptes clients, avec l'ancienneté de chaque compte. Une
+      ligne par compte, quel que soit son statut.
+    columns:
+      - name: compte_id
+        description: "Identifiant unique du compte (clé primaire)."
+        data_tests:
+          - unique
+          - not_null
+      - name: nom_client
+        description: >
+          Nom complet du client rattaché au compte (pour un compte joint, un
+          seul titulaire est enregistré).
+      - name: email
+        description: "Adresse email du client."
+      - name: type_compte
+        description: "Type de compte : courant, epargne ou joint."
+      - name: date_ouverture
+        description: "Date d'ouverture du compte."
+      - name: solde_initial
+        description: "Solde du compte à son ouverture, avant toute transaction."
+      - name: statut
+        description: "Statut du compte : actif, inactif ou cloture."
+      - name: anciennete_jours
+        description: >
+          Nombre de jours entre date_ouverture et la date d'exécution du
+          modèle (date du jour dans le fuseau horaire de la session
+          Snowflake). La valeur est figée dans la table jusqu'à la prochaine
+          exécution du modèle. Elle continue d'augmenter pour les comptes
+          inactifs ou clôturés : la date de clôture n'existe pas dans les
+          données.
+
+  - name: dim_categories
+    description: >
+      Dimension des catégories de transactions. Une ligne par catégorie.
+    columns:
+      - name: categorie_id
+        description: "Identifiant unique de la catégorie (clé primaire)."
+        data_tests:
+          - unique
+          - not_null
+      - name: nom_categorie
+        description: "Nom de la catégorie."
+      - name: type_categorie
+        description: >
+          Nature de la catégorie : depense ou revenu. Indépendante du sens
+          d'une transaction (type_operation) : les virements reçus sur un
+          compte épargne sont des crédits classés dans « Épargne versée »,
+          une catégorie de type depense.
+      - name: groupe
+        description: "Groupe parent de la catégorie (Quotidien, Logement, Loisirs...)."
+
+  - name: fct_transactions
+    description: >
+      Table de faits des transactions validées (statut = 'validee'). Les
+      transactions en attente ou rejetées en sont exclues. Une ligne par
+      transaction validée.
+    columns:
+      - name: transaction_id
+        description: "Identifiant unique de la transaction (clé primaire)."
+        data_tests:
+          - unique
+          - not_null
+      - name: compte_id
+        description: "Compte concerné. Clé étrangère vers dim_comptes."
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('dim_comptes')
+                field: compte_id
+      - name: categorie_id
+        description: "Catégorie de la transaction. Clé étrangère vers dim_categories."
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('dim_categories')
+                field: categorie_id
+      - name: date_transaction
+        description: "Date et heure de la transaction."
+      - name: mois_transaction
+        description: "Premier jour du mois de la transaction (DATE)."
+      - name: montant
+        description: "Montant de la transaction, toujours positif."
+      - name: montant_signe
+        description: "Montant avec son signe : positif pour un crédit, négatif pour un débit."
+      - name: type_operation
+        description: "Sens de l'opération : debit ou credit."
+      - name: nom_client
+        description: >
+          Nom du client rattaché au compte (un seul titulaire enregistré pour
+          un compte joint).
+      - name: nom_categorie
+        description: "Nom de la catégorie de la transaction."
+      - name: groupe
+        description: "Groupe parent de la catégorie."
+      - name: statut
+        description: "Statut de la transaction. Toujours validee dans cette table."
+
+  - name: mart_solde_mensuel
+    description: >
+      Solde mensuel de chaque compte, calculé à partir des transactions
+      validées. Une ligne par compte et par mois comptant au moins une
+      transaction validée : un mois sans transaction n'a pas de ligne, et un
+      compte sans aucune transaction validée n'apparaît pas.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - compte_id
+              - mois
+    columns:
+      - name: compte_id
+        description: "Compte concerné. Clé étrangère vers dim_comptes."
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_comptes')
+                field: compte_id
+      - name: nom_client
+        description: >
+          Nom du client rattaché au compte (un seul titulaire enregistré pour
+          un compte joint).
+      - name: type_compte
+        description: "Type de compte : courant, epargne ou joint."
+      - name: mois
+        description: "Premier jour du mois (DATE)."
+        data_tests:
+          - not_null
+      - name: total_credits
+        description: "Somme des crédits validés du mois."
+      - name: total_debits
+        description: "Somme des débits validés du mois, exprimée en valeur positive."
+      - name: solde_net
+        description: "Solde net du mois : total_credits - total_debits."
+      - name: solde_cumule
+        description: >
+          Solde cumulé à la fin du mois : solde_initial du compte + somme des
+          soldes nets de tous les mois jusqu'à celui-ci. Calculé uniquement
+          sur les transactions validées chargées : c'est le solde réel du
+          compte seulement si toutes les transactions depuis l'ouverture sont
+          présentes. Pas de valeur pour un mois sans transaction validée.
+        data_tests:
+          - not_null
+
+  - name: mart_budget_vs_reel
+    description: >
+      Comparaison des dépenses réelles (débits validés) aux budgets prévus,
+      par compte, catégorie et mois. Une ligne par combinaison ayant un
+      budget, une dépense, ou les deux. Une dépense sans budget a un
+      montant_prevu de 0 ; un budget sans dépense a un montant_reel de 0.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - compte_id
+              - categorie_id
+              - mois
+    columns:
+      - name: compte_id
+        description: "Compte concerné. Clé étrangère vers dim_comptes."
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_comptes')
+                field: compte_id
+      - name: nom_client
+        description: >
+          Nom du client rattaché au compte (un seul titulaire enregistré pour
+          un compte joint).
+      - name: categorie_id
+        description: "Catégorie concernée. Clé étrangère vers dim_categories."
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_categories')
+                field: categorie_id
+      - name: nom_categorie
+        description: "Nom de la catégorie."
+      - name: mois
+        description: "Premier jour du mois (DATE)."
+        data_tests:
+          - not_null
+      - name: montant_prevu
+        description: >
+          Montant budgété pour ce compte, cette catégorie et ce mois (somme
+          des budgets de la combinaison). 0 si aucun budget n'est défini.
+      - name: montant_reel
+        description: >
+          Total des débits validés de ce compte dans cette catégorie sur ce
+          mois (filtre sur type_operation = 'debit', quel que soit le type de
+          la catégorie). 0 si aucune dépense validée : une transaction en
+          attente ou rejetée n'est pas comptée.
+      - name: ecart
+        description: >
+          Écart entre la dépense réelle et le budget : montant_reel -
+          montant_prevu. Positif : la dépense est supérieure au montant
+          prévu ; négatif : il reste de la marge ; nul : le budget est
+          exactement consommé. Pour une dépense sans budget, montant_prevu
+          vaut 0 : l'écart est alors égal à la dépense (positif) mais
+          depassement reste faux. Pour repérer les dépassements de budget,
+          utiliser depassement et non le signe de ecart.
+      - name: depassement
+        description: >
+          Vrai si un budget existe et que la dépense réelle le dépasse. Faux
+          sinon, y compris pour une dépense sans budget.

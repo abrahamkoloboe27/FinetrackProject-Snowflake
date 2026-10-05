@@ -1,0 +1,120 @@
+version: 2
+
+sources:
+  - name: raw
+    description: >
+      Données brutes de FinTrack Analytics, telles qu'elles ont été chargées
+      dans Snowflake (schéma FINTRACK_DB.RAW). Aucune transformation : ces
+      tables ne sont lues que par les modèles staging.
+    database: fintrack_db
+    schema: raw
+    tables:
+      - name: raw_budgets
+        description: >
+          Budgets mensuels prévus par les clients : une ligne par compte, par
+          catégorie de dépense et par mois. Tous les comptes n'ont pas de
+          budget : dans l'échantillon chargé, seuls les comptes 1 et 2 en ont.
+        columns:
+          - name: id
+            data_type: number(38,0)
+            description: "Identifiant unique du budget."
+          - name: compte_id
+            data_type: number(38,0)
+            description: "Compte concerné. Référence vers raw_comptes.id."
+          - name: categorie_id
+            data_type: number(38,0)
+            description: "Catégorie budgétée. Référence vers raw_categories.id."
+          - name: mois
+            data_type: date
+            description: "Premier jour du mois concerné par le budget."
+          - name: montant_prevu
+            data_type: number(10,2)
+            description: "Montant budgété pour ce compte, cette catégorie et ce mois."
+
+      - name: raw_categories
+        description: >
+          Référentiel des catégories de transactions (dépenses et revenus),
+          regroupées par groupe parent.
+        columns:
+          - name: id
+            data_type: number(38,0)
+            description: "Identifiant unique de la catégorie."
+          - name: nom
+            data_type: varchar(50)
+            description: "Nom de la catégorie (Salaire, Loyer, Restaurant...)."
+          - name: type
+            data_type: varchar(10)
+            description: >
+              Nature de la catégorie : depense ou revenu. Indépendante du sens
+              d'une transaction (debit ou credit) : par exemple, les virements
+              reçus sur un compte épargne sont des crédits classés dans la
+              catégorie « Épargne versée », qui est de type depense.
+          - name: groupe
+            data_type: varchar(30)
+            description: >
+              Groupe parent de la catégorie : Revenus, Quotidien, Logement,
+              Loisirs, Épargne ou Divers.
+
+      - name: raw_comptes
+        description: >
+          Comptes bancaires des clients FinTrack : une ligne par compte, quel
+          que soit son statut (actif, inactif ou clôturé). Aucun filtre n'est
+          appliqué à ce niveau.
+        columns:
+          - name: id
+            data_type: number(38,0)
+            description: "Identifiant unique du compte."
+          - name: nom_client
+            data_type: varchar(100)
+            description: >
+              Nom complet du client rattaché au compte (pour un compte joint,
+              un seul titulaire est enregistré).
+          - name: email
+            data_type: varchar(150)
+            description: "Adresse email du client."
+          - name: type_compte
+            data_type: varchar(20)
+            description: "Type de compte : courant, epargne ou joint."
+          - name: date_ouverture
+            data_type: date
+            description: "Date d'ouverture du compte."
+          - name: solde_initial
+            data_type: number(12,2)
+            description: "Solde du compte à son ouverture, avant toute transaction."
+          - name: statut
+            data_type: varchar(10)
+            description: "Statut du compte : actif, inactif ou cloture."
+
+      - name: raw_transactions
+        description: >
+          Opérations bancaires des clients : une ligne par transaction, quel
+          que soit son statut (validée, en attente ou rejetée).
+        columns:
+          - name: id
+            data_type: number(38,0)
+            description: "Identifiant unique de la transaction."
+          - name: compte_id
+            data_type: number(38,0)
+            description: "Compte concerné. Référence vers raw_comptes.id."
+          - name: date_transaction
+            data_type: timestamp_ntz
+            description: "Date et heure de la transaction, sans fuseau horaire."
+          - name: montant
+            data_type: number(10,2)
+            description: >
+              Montant de la transaction, toujours positif : le sens de
+              l'opération est donné par type_operation.
+          - name: type_operation
+            data_type: varchar(10)
+            description: >
+              Sens de l'opération : debit ou credit. Indépendant du type de la
+              catégorie (depense ou revenu).
+          - name: categorie_id
+            data_type: number(38,0)
+            description: "Catégorie de la transaction. Référence vers raw_categories.id."
+          - name: description
+            data_type: varchar(255)
+            description: "Libellé de la transaction."
+          - name: statut
+            data_type: varchar(15)
+            description: "Statut de la transaction : validee, en_attente ou rejetee."

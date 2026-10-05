@@ -1,0 +1,46 @@
+version: 2
+
+models:
+  - name: int_transactions_enrichies
+    description: >
+      Transactions enrichies du nom du client, du type de compte et des
+      informations de leur catégorie, avec le mois de la transaction. Tous
+      les statuts sont conservés : le filtre sur les transactions validées
+      est appliqué dans fct_transactions. Modèle éphémère : aucune table ni
+      vue n'est créée dans Snowflake, il est injecté comme CTE dans les
+      modèles qui le référencent.
+    columns:
+      - name: transaction_id
+        description: "Identifiant unique de la transaction."
+      - name: compte_id
+        description: "Compte concerné par la transaction."
+      - name: date_transaction
+        description: "Date et heure de la transaction."
+      - name: montant
+        description: "Montant de la transaction, toujours positif."
+      - name: type_operation
+        description: "Sens de l'opération : debit ou credit."
+      - name: categorie_id
+        description: "Catégorie de la transaction."
+      - name: description
+        description: "Libellé de la transaction."
+      - name: statut
+        description: "Statut de la transaction : validee, en_attente ou rejetee."
+      - name: montant_signe
+        description: "Montant avec son signe : positif pour un crédit, négatif pour un débit."
+      - name: nom_client
+        description: >
+          Nom du client rattaché au compte (depuis stg_comptes). Pour un
+          compte joint, un seul titulaire est enregistré.
+      - name: type_compte
+        description: "Type du compte : courant, epargne ou joint (depuis stg_comptes)."
+      - name: nom_categorie
+        description: "Nom de la catégorie (depuis stg_categories)."
+      - name: type_categorie
+        description: >
+          Nature de la catégorie : depense ou revenu (depuis stg_categories).
+          Indépendante du sens de l'opération (type_operation).
+      - name: groupe
+        description: "Groupe parent de la catégorie (depuis stg_categories)."
+      - name: mois_transaction
+        description: "Premier jour du mois de la transaction (DATE)."

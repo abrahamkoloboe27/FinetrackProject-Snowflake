@@ -1,0 +1,174 @@
+version: 2
+
+models:
+  - name: stg_comptes
+    description: >
+      Comptes clients renommés (id devient compte_id), avec le statut mis en
+      minuscules. Aucun compte n'est filtré. Une ligne par compte.
+    columns:
+      - name: compte_id
+        description: "Identifiant unique du compte."
+        data_tests:
+          - unique
+          - not_null
+      - name: nom_client
+        description: >
+          Nom complet du client rattaché au compte (pour un compte joint, un
+          seul titulaire est enregistré).
+      - name: email
+        description: "Adresse email du client."
+      - name: type_compte
+        description: "Type de compte : courant, epargne ou joint."
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['courant', 'epargne', 'joint']
+      - name: date_ouverture
+        description: "Date d'ouverture du compte."
+      - name: solde_initial
+        description: "Solde du compte à son ouverture, avant toute transaction."
+      - name: statut
+        description: "Statut du compte, en minuscules : actif, inactif ou cloture."
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['actif', 'inactif', 'cloture']
+
+  - name: stg_transactions
+    description: >
+      Transactions bancaires renommées et typées, tous statuts confondus
+      (aucun filtre). Le montant reste positif ; montant_signe porte le sens
+      de l'opération. Une ligne par transaction.
+    columns:
+      - name: transaction_id
+        description: "Identifiant unique de la transaction."
+        data_tests:
+          - unique
+          - not_null
+      - name: compte_id
+        description: "Compte concerné par la transaction."
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_comptes')
+                field: compte_id
+      - name: date_transaction
+        description: "Date et heure de la transaction (TIMESTAMP_NTZ, sans fuseau horaire)."
+      - name: montant
+        description: "Montant de la transaction, toujours strictement positif."
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                inclusive: false
+      - name: type_operation
+        description: >
+          Sens de l'opération : debit ou credit. Indépendant du type de la
+          catégorie (depense ou revenu).
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['debit', 'credit']
+      - name: categorie_id
+        description: "Catégorie de la transaction."
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_categories')
+                field: categorie_id
+      - name: description
+        description: "Libellé de la transaction."
+      - name: statut
+        description: "Statut de la transaction : validee, en_attente ou rejetee."
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['validee', 'en_attente', 'rejetee']
+      - name: montant_signe
+        description: >
+          Montant avec son signe : +montant pour un crédit, -montant pour un
+          débit. NULL si le type d'opération est inconnu.
+        data_tests:
+          - not_null
+
+  - name: stg_categories
+    description: >
+      Référentiel des catégories de transactions. Les colonnes id, nom et
+      type sont renommées categorie_id, nom_categorie et type_categorie, pour
+      éviter des noms trop génériques qui deviennent ambigus une fois les
+      tables jointes. Une ligne par catégorie.
+    columns:
+      - name: categorie_id
+        description: "Identifiant unique de la catégorie."
+        data_tests:
+          - unique
+          - not_null
+      - name: nom_categorie
+        description: "Nom de la catégorie."
+      - name: type_categorie
+        description: >
+          Nature de la catégorie : depense ou revenu. Indépendante du sens
+          d'une transaction (type_operation) : les virements reçus sur un
+          compte épargne sont des crédits classés dans « Épargne versée »,
+          une catégorie de type depense.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['depense', 'revenu']
+      - name: groupe
+        description: "Groupe parent de la catégorie (Quotidien, Logement, Loisirs...)."
+
+  - name: stg_budgets
+    description: >
+      Budgets mensuels prévus, avec le mois typé en DATE. Une ligne par
+      compte, catégorie et mois budgétés.
+    data_tests:
+      # un seul budget par compte, catégorie et mois
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - compte_id
+              - categorie_id
+              - mois
+      # le mois budgété est bien le premier jour du mois
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "mois = date_trunc('month', mois)"
+    columns:
+      - name: budget_id
+        description: "Identifiant unique du budget."
+        data_tests:
+          - unique
+          - not_null
+      - name: compte_id
+        description: "Compte concerné par le budget."
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_comptes')
+                field: compte_id
+      - name: categorie_id
+        description: "Catégorie budgétée."
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_categories')
+                field: categorie_id
+      - name: mois
+        description: "Premier jour du mois concerné par le budget."
+        data_tests:
+          - not_null
+      - name: montant_prevu
+        description: "Montant budgété pour ce compte, cette catégorie et ce mois."
+        data_tests:
+          - not_null
