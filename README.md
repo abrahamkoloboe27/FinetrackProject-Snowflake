@@ -58,6 +58,7 @@ flowchart LR
     dim_comptes --> mart_budget_vs_reel
     dim_categories --> mart_budget_vs_reel
 ```
+![DBT Lineage](assets/lineage.png)
 
 | Couche | Dossier | Matérialisation | Schéma Snowflake | Rôle |
 |---|---|---|---|---|
