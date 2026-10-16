@@ -1,0 +1,78 @@
+# PR policy : vérifie qu'une pull request respecte le workflow git de l'équipe.
+#   - flux de branches autorisé (travail → dev → staging → main, hotfix → main) ;
+#   - titre au format Conventional Commits (il devient le message du commit
+#     de squash ou de merge, et alimente les notes de release).
+# La logique est dans scripts/ci/check_pr_policy.sh. Les données saisies par
+# l'auteur (branche, titre) passent par `env:` et ne sont jamais interpolées
+# dans le script : elles ne peuvent pas être exécutées.
+# Se relance quand le titre ou la branche cible change (type « edited »).
+# Changer la branche cible ne relance pas la CI (ses checks restent ceux de
+# l'ancienne base) : le contrôle échoue alors tant que la PR n'a pas été
+# fermée puis rouverte (ou qu'un commit n'a pas été poussé).
+name: PR policy
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+    branches: [dev, staging, main]
+
+concurrency:
+  group: pr-policy-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  policy:
+    name: PR policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read  # exécutions du workflow CI de la PR (base contrôlée)
+    steps:
+      - name: Récupérer le script de contrôle
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/ci
+
+      # HEAD_REPO / BASE_REPO : une branche dev, staging ou main venue d'un
+      # fork n'est pas une promotion (le nom seul ne suffit pas).
+      - name: Vérifier le flux de branches et le titre
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_REF: ${{ github.head_ref }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REPO: ${{ github.repository }}
+        run: bash scripts/ci/check_pr_policy.sh
+
+      # Base modifiée (événement « edited ») : les checks de la CI restent
+      # attachés au commit de tête et gardent le résultat calculé pour
+      # l'ancienne base (Slim CI vers dev au lieu du build complet vers main,
+      # par exemple). Le nom de chaque exécution de CI retient sa base
+      # (run-name « CI base=<base> PR #<n> ») : tant qu'aucune CI n'a tourné
+      # sur la base actuelle, ce contrôle échoue, à chaque édition.
+      - name: Vérifier que la CI a tourné pour cette branche cible
+        if: github.event.action == 'edited'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_REF: ${{ github.base_ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          runs="repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs"
+          query="event=pull_request&head_sha=${HEAD_SHA}&per_page=20"
+          # Dernière exécution de CI de CETTE PR pour ce commit (le même commit
+          # peut être la tête de deux PR).
+          filter="[.workflow_runs[] | select(.display_title | endswith(\" PR #${PR_NUMBER}\"))]"
+          ci_title="$(gh api "${runs}?${query}" --jq "${filter}[0].display_title // \"\"")"
+          if [[ "$ci_title" != "CI base=${BASE_REF} "* ]]; then
+            echo "::error title=CI à relancer::La CI a été calculée pour une autre branche cible." \
+              "Fermez puis rouvrez la PR (ou poussez un commit) pour la relancer."
+            exit 1
+          fi
+          echo "La CI de ce commit a tourné pour la base ${BASE_REF}."

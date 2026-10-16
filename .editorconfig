@@ -1,0 +1,28 @@
+# EditorConfig : réglages communs à tous les éditeurs de l'équipe.
+# La plupart des éditeurs le lisent nativement (VS Code : extension
+# « EditorConfig for VS Code »). Voir https://editorconfig.org
+root = true
+
+# Par défaut : UTF-8, fins de ligne Unix, un saut de ligne en fin de
+# fichier, pas d'espace en fin de ligne, indentation de 4 espaces.
+# Ce sont les mêmes règles que les hooks pre-commit (end-of-file-fixer,
+# trailing-whitespace, mixed-line-ending) et que SQLFluff pour le SQL.
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+# YAML (dbt, GitHub Actions, MkDocs) et JSON : 2 espaces, comme yamllint.
+[*.{yml,yaml,json}]
+indent_size = 2
+
+# Markdown : deux espaces en fin de ligne forcent un saut de ligne.
+[*.md]
+trim_trailing_whitespace = false
+
+# Makefile : les recettes doivent être indentées par une tabulation.
+[Makefile]
+indent_style = tab

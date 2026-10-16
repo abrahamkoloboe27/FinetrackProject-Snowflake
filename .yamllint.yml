@@ -1,0 +1,53 @@
+# Configuration yamllint de finetrack_analytics.
+#
+# Base : les règles par défaut de yamllint, adaptées aux YAML dbt
+# (dbt_project.yml, models/**/*.yml) et aux workflows GitHub Actions.
+# Chaque écart au défaut est expliqué au-dessus du réglage concerné.
+#
+# Lancer à la main : yamllint --strict .
+# Le hook yamllint de .pre-commit-config.yaml lance la même commande.
+
+extends: default
+
+# Fichiers générés ou installés : jamais contrôlés.
+ignore: |
+  target/
+  dbt_packages/
+  logs/
+  site/
+  .venv/
+  venv/
+
+rules:
+  # Pas de « --- » obligatoire en tête de fichier : aucun YAML du projet
+  # n'en a, et ni dbt ni GitHub n'en ont besoin.
+  document-start: disable
+
+  # La clé `on:` des workflows GitHub serait lue comme un booléen par
+  # yamllint : on ne contrôle donc que les valeurs, pas les clés. Seuls
+  # true et false sont acceptés (pas yes, no, on, off).
+  truthy:
+    allowed-values: ["true", "false"]
+    check-keys: false
+
+  # Descriptions dbt et commandes des workflows : 120 caractères au plus.
+  # Une URL ou un autre mot insécable plus long reste autorisé.
+  line-length:
+    max: 120
+    allow-non-breakable-words: true
+    allow-non-breakable-inline-mappings: true
+
+  indentation:
+    spaces: 2
+    # Les deux styles de liste sont acceptés (`models:` puis `  - name:`
+    # comme dans dbt, ou le tiret aligné sous la clé), mais un même fichier
+    # doit s'en tenir à un seul.
+    indent-sequences: consistent
+    # Les blocs `run: |` et les descriptions `>` gardent leur mise en forme.
+    check-multi-line-strings: false
+
+  # Ancres YAML (&nom / *nom, utilisées dans ci/profiles.yml) : une ancre
+  # doit être déclarée avant usage et ne pas être définie deux fois.
+  anchors:
+    forbid-undeclared-aliases: true
+    forbid-duplicated-anchors: true

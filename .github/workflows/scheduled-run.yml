@@ -1,0 +1,100 @@
+# Scheduled prod run : reconstruit et teste la prod chaque jour à 05:00 UTC.
+# Les tables des marts reflètent ainsi les données chargées dans RAW depuis
+# la veille, et les tests de données détectent une anomalie au plus tôt.
+# Code exécuté : la pointe de main au démarrage du job (lancement manuel
+# refusé ailleurs), et non le commit du déclenchement : un run qui attend
+# (approbation, déploiement en cours) ne reconstruit jamais du code périmé.
+# Sans secrets Snowflake : avertissement, pas d'échec quotidien.
+# Remarque : si l'environnement « prod » exige une approbation, chaque run
+# attend cette approbation.
+name: Scheduled prod run
+
+on:
+  schedule:
+    - cron: "0 5 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: scheduled-prod-run
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12"
+  DBT_PROFILES_DIR: ${{ github.workspace }}/ci
+  DBT_SEND_ANONYMOUS_USAGE_STATS: "false"
+
+jobs:
+  run:
+    name: dbt build (prod)
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # Même groupe que le job « Deploy (prod) » du workflow CD : jamais deux
+    # dbt build de la prod en même temps. Le groupe est posé sur le job, pas
+    # sur le workflow : un lancement manuel depuis une autre branche (job
+    # ignoré) n'entre pas dans la file. Limite de GitHub : un seul job en
+    # attente par groupe ; un nouveau venu annule celui qui attendait (voir
+    # docs/ci-cd.md, « Scheduled prod run »).
+    concurrency:
+      group: dbt-deploy-prod
+      cancel-in-progress: false
+    environment:
+      name: prod
+    env:
+      SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+      SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
+      SNOWFLAKE_PASSWORD: ${{ secrets.SNOWFLAKE_PASSWORD }}
+      SNOWFLAKE_PRIVATE_KEY: ${{ secrets.SNOWFLAKE_PRIVATE_KEY }}
+      SNOWFLAKE_PRIVATE_KEY_PASSPHRASE: ${{ secrets.SNOWFLAKE_PRIVATE_KEY_PASSPHRASE }}
+      SNOWFLAKE_ROLE: ${{ secrets.SNOWFLAKE_ROLE || 'FINTRACK_ROLE' }}
+      SNOWFLAKE_WAREHOUSE: ${{ secrets.SNOWFLAKE_WAREHOUSE || 'FINTRACK_WH' }}
+      SNOWFLAKE_DATABASE: ${{ secrets.SNOWFLAKE_DATABASE || 'FINTRACK_DB' }}
+      DBT_TARGET: prod
+      DBT_QUERY_TAG: github-scheduled-prod-${{ github.run_id }}
+    steps:
+      # ref = refs/heads/main (imposé par le `if` du job) : la pointe de la
+      # branche au démarrage du job, après une éventuelle approbation.
+      - name: Récupérer le code
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.ref }}
+          persist-credentials: false
+
+      - name: Vérifier les secrets Snowflake
+        id: snowflake
+        run: bash scripts/ci/check_snowflake_env.sh --soft
+
+      - name: Installer Python et dbt
+        if: steps.snowflake.outputs.ready == 'true'
+        uses: ./.github/actions/setup-dbt
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: dbt build
+        if: steps.snowflake.outputs.ready == 'true'
+        run: dbt build --target prod
+
+      - name: Résumé dbt
+        if: ${{ !cancelled() && steps.snowflake.outputs.ready == 'true' }}
+        run: python3 scripts/ci/dbt_summary.py "Run planifié de la prod"
+
+      # Dépôt public : un artefact se télécharge sans masquage des secrets.
+      - name: Masquer compte et utilisateur dans les artefacts
+        if: ${{ !cancelled() && steps.snowflake.outputs.ready == 'true' }}
+        run: python3 scripts/ci/redact_artifacts.py
+
+      - name: Publier les artefacts dbt
+        if: ${{ !cancelled() && steps.snowflake.outputs.ready == 'true' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: dbt-scheduled-prod
+          path: |
+            target/manifest.json
+            target/run_results.json
+            logs/dbt.log
+          retention-days: 30
+          if-no-files-found: ignore
+          overwrite: true

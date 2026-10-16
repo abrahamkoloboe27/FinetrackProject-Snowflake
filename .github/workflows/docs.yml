@@ -1,0 +1,146 @@
+# Docs : publie le site de documentation sur GitHub Pages.
+#   https://abrahamkoloboe27.github.io/FinetrackProject-Snowflake/
+# Contenu publié :
+#   /      site MkDocs (dossier docs/, mkdocs.yml)
+#   /dbt/  catalogue dbt (dbt docs generate --static), décrivant la prod.
+# Déclencheurs :
+#   - fin d'un CD réussi sur main (modèles redéployés → catalogue à jour) ;
+#   - push sur main qui ne touche que la documentation (le CD ne tourne pas) ;
+#   - lancement manuel depuis main.
+# Sans secrets Snowflake, le catalogue est généré hors ligne : modèles,
+# tests, lineage et SQL sont présents, seules les colonnes réelles manquent.
+name: Docs
+
+on:
+  workflow_run:
+    workflows: [CD]
+    types: [completed]
+    branches: [main]
+  push:
+    branches: [main]
+    paths:
+      - docs/**
+      - assets/**
+      - mkdocs.yml
+      - requirements-docs.txt
+      - .github/workflows/docs.yml
+  workflow_dispatch:
+
+# Un seul déploiement Pages à la fois, sans annuler celui en cours.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12"
+  DBT_PROFILES_DIR: ${{ github.workspace }}/ci
+  DBT_SEND_ANONYMOUS_USAGE_STATS: "false"
+
+jobs:
+  build:
+    name: Build docs
+    # workflow_run : seulement après un CD réussi déclenché par un push (pas
+    # après un lancement manuel ni un échec). workflow_dispatch : depuis main.
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      NO_MKDOCS_2_WARNING: "true"
+      SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+      SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
+      SNOWFLAKE_PASSWORD: ${{ secrets.SNOWFLAKE_PASSWORD }}
+      SNOWFLAKE_PRIVATE_KEY: ${{ secrets.SNOWFLAKE_PRIVATE_KEY }}
+      SNOWFLAKE_PRIVATE_KEY_PASSPHRASE: ${{ secrets.SNOWFLAKE_PRIVATE_KEY_PASSPHRASE }}
+      SNOWFLAKE_ROLE: ${{ secrets.SNOWFLAKE_ROLE || 'FINTRACK_ROLE' }}
+      SNOWFLAKE_WAREHOUSE: ${{ secrets.SNOWFLAKE_WAREHOUSE || 'FINTRACK_WH' }}
+      SNOWFLAKE_DATABASE: ${{ secrets.SNOWFLAKE_DATABASE || 'FINTRACK_DB' }}
+      DBT_TARGET: prod
+      DBT_QUERY_TAG: github-docs-${{ github.run_id }}
+    steps:
+      # Toujours la pointe de main au démarrage du job (les trois déclencheurs
+      # sont limités à main) : un run plus ancien ne peut pas republier un site
+      # périmé par-dessus une publication plus récente.
+      - name: Récupérer le code
+        uses: actions/checkout@v7
+        with:
+          ref: refs/heads/main
+          persist-credentials: false
+
+      - name: Installer Python et dbt
+        uses: ./.github/actions/setup-dbt
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Installer MkDocs
+        run: python -m pip install --disable-pip-version-check -r requirements-docs.txt
+
+      - name: mkdocs build --strict
+        run: mkdocs build --strict -d site
+
+      - name: Vérifier les secrets Snowflake
+        id: snowflake
+        run: bash scripts/ci/check_snowflake_env.sh --soft
+
+      # Catalogue réel : colonnes et types lus dans la prod.
+      - name: Catalogue dbt (connecté à la prod)
+        id: dbt-docs-online
+        if: steps.snowflake.outputs.ready == 'true'
+        continue-on-error: true
+        run: dbt docs generate --target prod --static
+
+      # Hors ligne : aucune connexion (--no-populate-cache), catalogue vide.
+      # Valeurs factices non vides : le profil exige account et user.
+      - name: Catalogue dbt (hors ligne)
+        if: steps.snowflake.outputs.ready != 'true' || steps.dbt-docs-online.outcome == 'failure'
+        env:
+          SNOWFLAKE_ACCOUNT: ci-offline
+          SNOWFLAKE_USER: ci-offline
+          SNOWFLAKE_PASSWORD: ""
+          SNOWFLAKE_PRIVATE_KEY: ""
+          SNOWFLAKE_PRIVATE_KEY_PASSPHRASE: ""
+          ONLINE_OUTCOME: ${{ steps.dbt-docs-online.outcome }}
+        run: |
+          detail="catalogue hors ligne publié (modèles, tests et lineage, sans colonnes réelles)"
+          if [ "$ONLINE_OUTCOME" = "failure" ]; then
+            echo "::warning title=Catalogue dbt::Génération connectée en échec : ${detail}."
+          else
+            echo "::notice title=Catalogue dbt::Secrets Snowflake absents : ${detail}."
+          fi
+          dbt docs generate --target prod --static --empty-catalog --no-populate-cache
+
+      - name: Ajouter le catalogue dbt au site (/dbt/)
+        run: |
+          set -euo pipefail
+          test -f target/static_index.html
+          mkdir -p site/dbt
+          cp target/static_index.html site/dbt/index.html
+          echo "Site prêt : $(find site -type f | wc -l) fichiers."
+
+      - name: Préparer l'artefact Pages
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+
+  deploy:
+    name: Deploy Pages
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Déployer sur GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5

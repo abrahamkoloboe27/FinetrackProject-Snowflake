@@ -1,9 +1,8 @@
-
 # Name your project! Project names should contain only lowercase characters
 # and underscores. A good package name should reflect your organization's
 # name or the intended use of these models
 name: 'finetrack_analytics'
-version: '1.0.0'
+version: '1.1.0'
 
 # This setting configures which "profile" dbt uses for this project.
 profile: 'finetrack_analytics'
@@ -31,8 +30,9 @@ clean-targets:         # directories to be removed by `dbt clean`
 
 # Matérialisation et schéma par défaut de chaque couche. Ces réglages
 # peuvent être surchargés dans un modèle avec `{{ config(...) }}`.
-# Les noms de schéma sont utilisés tels quels grâce à la macro
-# macros/generate_schema_name.sql.
+# Le schéma réel dépend de l'environnement (macros/generate_schema_name.sql) :
+# en prod, +schema est utilisé tel quel (STAGING, MARTS) ; ailleurs, il est
+# préfixé par le schéma du profil (DEV_STAGING, CI_PR_12_MARTS...).
 models:
   finetrack_analytics:
     staging:
