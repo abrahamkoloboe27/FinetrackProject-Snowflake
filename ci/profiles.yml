@@ -1,0 +1,85 @@
+# =====================================================================
+# FinTrack Analytics : profil dbt de la CI/CD (GitHub Actions)
+#
+# Fichier versionné, SANS AUCUN SECRET : les identifiants viennent de
+# variables d'environnement, alimentées par les secrets GitHub du dépôt
+# ou de l'environnement (dev, staging, prod). Liste : docs/secrets.md.
+#
+# Dans les workflows : DBT_PROFILES_DIR=${{ github.workspace }}/ci.
+# Sur un poste de développeur, dbt continue d'utiliser ~/.dbt/profiles.yml
+# (target dev, schéma DEV_<PRENOM>) : ce fichier ne le remplace pas.
+# Pour reproduire la CI en local, depuis la racine du dépôt :
+#   make parse                                    (sans connexion)
+#   DBT_PROFILES_DIR=ci DBT_CI_SCHEMA=DEV_<PRENOM> dbt build --target ci
+# N'utilisez jamais les targets dev, staging ou prod de ce fichier depuis
+# un poste : elles écrivent dans les schémas partagés des environnements.
+# N'écrivez jamais de valeur dans ce fichier : exportez les variables
+# SNOWFLAKE_* dans votre terminal (docs/secrets.md). Un hook pre-commit
+# refuse tout identifiant en clair.
+#
+# Les quatre targets ne diffèrent que par le schéma de base. La macro
+# macros/generate_schema_name.sql en déduit les schémas réels :
+#   ci       CI_PR_<n> (DBT_CI_SCHEMA)  → CI_PR_<n>_STAGING, CI_PR_<n>_MARTS
+#   dev      DEV                        → DEV_STAGING, DEV_MARTS
+#   staging  PREPROD                    → PREPROD_STAGING, PREPROD_MARTS
+#   prod     STAGING                    → STAGING, MARTS (schémas historiques)
+# La target par défaut est ci ; DBT_TARGET ou --target la remplacent.
+#
+# Authentification : paire de clés RSA (recommandé) OU mot de passe.
+# dbt-snowflake ignore une variable vide ; si la clé et le mot de passe
+# sont tous deux fournis, la clé l'emporte.
+#   SNOWFLAKE_PRIVATE_KEY : de préférence le contenu du fichier .p8 sans
+#     les lignes -----BEGIN/END----- ni retours à la ligne (base64 sur une
+#     seule ligne). Un PEM complet est aussi accepté, à condition de
+#     commencer exactement par -----BEGIN (aucun espace ni ligne vide avant).
+#   SNOWFLAKE_PRIVATE_KEY_PASSPHRASE : uniquement pour une clé chiffrée.
+#     Absente ou vide sinon : une passphrase donnée avec une clé non
+#     chiffrée fait échouer la connexion.
+#
+# Sans connexion (dbt parse, dbt ls, docs hors-ligne), SNOWFLAKE_ACCOUNT
+# et SNOWFLAKE_USER doivent tout de même être définis et NON VIDES
+# (valeurs factices, ex. ci-offline) : sinon le profil est invalide.
+# =====================================================================
+
+finetrack_analytics:
+  target: "{{ env_var('DBT_TARGET', 'ci') }}"
+  outputs:
+
+    # Réglages communs : l'ancre &snowflake les fait reprendre par les
+    # autres targets (<<: *snowflake), qui ne changent que le schéma.
+    ci: &snowflake
+      type: snowflake
+      account: "{{ env_var('SNOWFLAKE_ACCOUNT') }}"
+      user: "{{ env_var('SNOWFLAKE_USER') }}"
+      password: "{{ env_var('SNOWFLAKE_PASSWORD', '') }}"
+      private_key: "{{ env_var('SNOWFLAKE_PRIVATE_KEY', '') }}"
+      private_key_passphrase: "{{ env_var('SNOWFLAKE_PRIVATE_KEY_PASSPHRASE', '') }}"
+      role: "{{ env_var('SNOWFLAKE_ROLE', 'FINTRACK_ROLE') }}"
+      database: "{{ env_var('SNOWFLAKE_DATABASE', 'FINTRACK_DB') }}"
+      warehouse: "{{ env_var('SNOWFLAKE_WAREHOUSE', 'FINTRACK_WH') }}"
+      schema: "{{ env_var('DBT_CI_SCHEMA', 'CI_LOCAL') }}"   # CI_PR_<n> en CI
+      threads: 4
+      # Étiquette des requêtes, visible dans l'historique Snowflake
+      # (ex. github-ci-pr-12) : coût et traçabilité par exécution.
+      query_tag: "{{ env_var('DBT_QUERY_TAG', 'dbt-finetrack') }}"
+      client_session_keep_alive: false
+      # Reprises sur erreur réseau ou service indisponible. connect_timeout
+      # n'est PAS un délai de connexion : c'est la pause, en secondes, entre
+      # deux tentatives. retry_on_database_errors reste à false : sinon une
+      # erreur d'identifiants serait elle aussi retentée, et le job ne
+      # tomberait qu'après plusieurs pauses au lieu d'échouer tout de suite.
+      connect_retries: 3
+      connect_timeout: 10
+      retry_on_database_errors: false
+
+    dev:
+      <<: *snowflake
+      schema: DEV
+
+    staging:
+      <<: *snowflake
+      schema: PREPROD
+
+    prod:
+      <<: *snowflake
+      schema: STAGING

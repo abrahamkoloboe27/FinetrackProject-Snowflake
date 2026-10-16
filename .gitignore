@@ -1,4 +1,3 @@
-
 target/
 dbt_packages/
 logs/
@@ -9,6 +8,17 @@ profiles.yml
 .user.yml
 *.p8
 *.pem
+rsa_key*
 .venv/
 venv/
 .DS_Store
+
+# Exception : le profil de la CI ne contient aucun secret (tout passe
+# par des variables d'environnement), il doit être versionné
+!ci/profiles.yml
+
+# Fichiers générés
+site/
+prod-state/
+__pycache__/
+*.py[cod]
