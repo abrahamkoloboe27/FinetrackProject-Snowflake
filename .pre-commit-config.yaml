@@ -1,0 +1,102 @@
+# Hooks pre-commit de finetrack_analytics.
+#
+# Installation, une fois par clone : make install
+# (ou : pip install -r requirements-dev.txt && pre-commit install).
+# Les contrôles tournent ensuite à chaque `git commit`, sur les fichiers
+# modifiés. Pour tout contrôler à la main : pre-commit run --all-files
+#
+# La CI (job « Lint » du workflow CI) lance exactement cette commande :
+# un commit qui passe en local passe aussi en CI.
+#
+# Versions épinglées. Pour les mettre à jour : pre-commit autoupdate, puis
+# garder sqlfluff et yamllint à la même version dans requirements-dev.txt.
+
+# pre-commit-hooks v6 utilise les noms d'étapes introduits par pre-commit 3.2.
+minimum_pre_commit_version: "3.2.0"
+
+# Dossiers générés ou installés (déjà ignorés par git) : jamais contrôlés.
+exclude: ^(target|dbt_packages|logs|site|\.venv|venv)/
+
+repos:
+  # Hygiène des fichiers texte : espaces, fins de ligne, syntaxe, secrets.
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+        # En Markdown, deux espaces en fin de ligne forcent un saut de ligne.
+        args: [--markdown-linebreak-ext=md]
+      - id: end-of-file-fixer
+        # Script protégé par un filtre git local qui masque le mot de passe
+        # au commit : on ne le réécrit pas (il n'a pas de saut de ligne final).
+        exclude: ^snowflake/00_setup_environnement\.sql$
+      - id: mixed-line-ending
+        args: [--fix=lf]
+      - id: check-yaml
+        # mkdocs.yml utilise des balises Python (!!python/name:...) pour
+        # mermaid : --unsafe vérifie la syntaxe sans charger ces balises.
+        args: [--unsafe]
+      - id: check-json
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        # Captures d'écran : 500 Ko au plus. Compresser une image plus lourde.
+        args: [--maxkb=500]
+      # Aucune exception : un fichier qui doit parler d'une clé PEM (doc,
+      # script de contrôle) ne recopie pas son en-tête complet.
+      - id: detect-private-key
+
+  # Secrets que detect-private-key ne voit pas. pygrep : aucune dépendance.
+  - repo: local
+    hooks:
+      # Début du DER PKCS#8 d'une clé RSA (en clair ou chiffrée) : repère la
+      # clé en base64 sur une ligne, format du secret SNOWFLAKE_PRIVATE_KEY.
+      # Les crochets empêchent ce fichier de se détecter lui-même.
+      - id: detect-private-key-base64
+        name: Clé privée RSA en base64 (sans en-tête PEM)
+        language: pygrep
+        entry: 'BgkqhkiG9w0BAQEFAAS[C]|BgkqhkiG9w0BBQ0[w]'
+        types: [text]
+      # Le profil de la CI ne lit ses identifiants que dans l'environnement.
+      - id: ci-profiles-env-var-only
+        name: ci/profiles.yml sans identifiant en clair
+        language: pygrep
+        entry: '^\s*(password|private_key|private_key_passphrase|token)\s*:(?!\s*["'']?\{\{\s*env_var\()'
+        files: ^ci/profiles\.yml$
+
+  # YAML : dbt_project.yml, models/**/*.yml, workflows, mkdocs.yml...
+  # Règles dans .yamllint.yml. --strict : un avertissement bloque aussi.
+  - repo: https://github.com/adrienverge/yamllint
+    rev: v1.38.0
+    hooks:
+      - id: yamllint
+        args: [--strict, --config-file=.yamllint.yml]
+
+  # SQL des modèles et des tests dbt. Règles dans .sqlfluff ; snowflake/,
+  # macros/ et les dossiers générés sont exclus (voir .sqlfluffignore).
+  - repo: https://github.com/sqlfluff/sqlfluff
+    rev: 4.4.0
+    hooks:
+      - id: sqlfluff-lint
+        files: ^(models|tests|analyses)/
+
+  # Scripts bash (scripts/**/*.sh).
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.11.0.1-1
+    hooks:
+      - id: shellcheck
+
+  # Workflows GitHub Actions (.github/workflows/*.yml) : syntaxe, expressions
+  # ${{ }}, injections de données non fiables. shellcheck-py permet aussi
+  # d'analyser les blocs `run:`. Binaire précompilé : ni Go ni Docker.
+  - repo: https://github.com/Mateusz-Grzelinski/actionlint-py
+    rev: v1.7.12.25
+    hooks:
+      - id: actionlint
+        additional_dependencies: [shellcheck-py==0.11.0.1]
+
+  # Schémas officiels de l'action composite (.github/actions/*/action.yml)
+  # et de .github/dependabot.yml, qu'actionlint ne contrôle pas.
+  - repo: https://github.com/python-jsonschema/check-jsonschema
+    rev: 0.38.2
+    hooks:
+      - id: check-github-actions
+      - id: check-dependabot

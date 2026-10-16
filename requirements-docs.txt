@@ -1,0 +1,6 @@
+# Site de documentation (MkDocs Material), publié sur GitHub Pages.
+# Utilisé par `make docs`, le job « Docs build » de la CI et le workflow Docs.
+# Versions exactes : Dependabot propose les mises à jour (PR vers dev).
+mkdocs==1.6.1
+mkdocs-material==9.7.7
+pymdown-extensions==12.3

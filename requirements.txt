@@ -1,0 +1,6 @@
+# Dépendances d'exécution de dbt (CI/CD et postes de développeur).
+# Versions exactes : tout le monde, la CI comprise, utilise la même
+# version de dbt. Les mises à jour arrivent par Dependabot (PR vers dev).
+# Outils de lint et de documentation : requirements-dev.txt.
+dbt-core==1.12.6
+dbt-snowflake==1.12.3

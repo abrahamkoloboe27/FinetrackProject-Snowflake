@@ -1,0 +1,115 @@
+# Configuration SQLFluff de finetrack_analytics.
+#
+# Elle décrit le style SQL DÉJÀ utilisé dans models/ et tests/ : le code
+# existant passe tel quel. Chaque écart aux réglages par défaut de SQLFluff
+# est expliqué juste au-dessus du réglage concerné.
+#
+# Périmètre : models/, tests/ et analyses/. Les dossiers exclus sont listés
+# dans .sqlfluffignore.
+#
+# Lancer à la main :
+#   sqlfluff lint models tests analyses   # contrôle
+#   sqlfluff fix models tests analyses    # corrige ce qui peut l'être (make fix)
+# Le hook sqlfluff-lint de .pre-commit-config.yaml utilise la même version
+# que requirements-dev.txt : garder les deux identiques.
+
+[sqlfluff]
+dialect = snowflake
+
+# Templater jinja (et non dbt) : pas besoin de connexion Snowflake ni de
+# profil pour analyser le SQL. ref() et source() sont simulés par
+# apply_dbt_builtins (voir plus bas).
+templater = jinja
+
+# Les modèles ont des lignes jusqu'à 92 caractères (calculs commentés,
+# sum(case ...)). 100 laisse un peu de marge sans autoriser les lignes
+# illisibles. Le défaut de SQLFluff est 80.
+max_line_length = 100
+
+# Règles désactivées : elles contredisent un choix de style délibéré.
+# - LT09 (une colonne par ligne dans le SELECT) : les petites CTE de
+#   correspondance tiennent volontairement sur une ligne, par exemple
+#   `select compte_id, nom_client from {{ ref('dim_comptes') }}`
+#   (mart_budget_vs_reel). Les SELECT de plus de deux colonnes restent
+#   écrits une colonne par ligne, par convention de revue.
+# - ST02 (CASE « inutile », remplaçable par COALESCE) : le CASE explicite
+#   `case when ... then true else false end` est plus lisible qu'un
+#   coalesce(condition, false) pour calculer un indicateur métier comme
+#   depassement (mart_budget_vs_reel).
+exclude_rules = LT09, ST02
+
+[sqlfluff:templater:jinja]
+# Fournit ref(), source(), config(), var(), is_incremental() et this, sans
+# exécuter dbt : ref('stg_comptes') est rendu par le nom stg_comptes.
+apply_dbt_builtins = True
+
+[sqlfluff:indentation]
+# Indentation de 4 espaces, jamais de tabulation.
+indent_unit = space
+tab_space_size = 4
+
+# Conditions de jointure : la première condition suit `on` sur la même
+# ligne, les suivantes sont alignées sous `on` :
+#     full outer join depenses
+#         on budgets.compte_id = depenses.compte_id
+#         and budgets.mois = depenses.mois
+indented_on_contents = False
+
+# Dans un CASE, `then` et `else` sont alignés sous `when` (et non décalés
+# de 4 espaces) :
+#     case
+#         when ...
+#             and ...
+#         then true
+#         else false
+#     end
+indented_then = False
+
+# Une condition sur plusieurs lignes peut commencer sur la ligne de son
+# mot-clé, les suivantes étant décalées de 4 espaces :
+#     where type_compte = 'epargne'
+#         and solde_cumule < 0
+# Le défaut (forbid) exigerait un retour à la ligne après where / when.
+implicit_indents = allow
+
+# Le contenu des clauses de fenêtre (over (...)) n'est pas contrôlé :
+# mart_solde_mensuel place l'opérateur en tête de ligne, décalé sous
+# l'opérande qu'il prolonge, et indente la fenêtre à partir de là :
+#     comptes.solde_initial
+#         + sum(...) over (
+#             partition by ...
+#         ) as solde_cumule
+# SQLFluff n'a pas de réglage pour ce style. script_content est la valeur
+# par défaut, conservée.
+skip_indentation_in = script_content,over_clause
+
+[sqlfluff:layout:type:comma]
+# Virgules en fin de ligne (défaut, rappelé ici car c'est la convention).
+line_position = trailing
+
+# Casse : tout en minuscules (mots-clés, identifiants, fonctions, littéraux
+# true/false/null et types). Le défaut « consistent » accepterait un
+# fichier entièrement en majuscules.
+[sqlfluff:rules:capitalisation.keywords]
+capitalisation_policy = lower
+
+[sqlfluff:rules:capitalisation.identifiers]
+extended_capitalisation_policy = lower
+
+[sqlfluff:rules:capitalisation.functions]
+extended_capitalisation_policy = lower
+
+[sqlfluff:rules:capitalisation.literals]
+capitalisation_policy = lower
+
+[sqlfluff:rules:capitalisation.types]
+extended_capitalisation_policy = lower
+
+[sqlfluff:rules:ambiguous.column_references]
+# group by / order by avec les noms de colonnes, jamais leur position
+# (group by compte_id, mois et non group by 1, 2).
+group_by_and_order_by_style = explicit
+
+[sqlfluff:rules:convention.casting_style]
+# Conversions écrites cast(x as date), jamais x::date.
+preferred_type_casting_style = cast

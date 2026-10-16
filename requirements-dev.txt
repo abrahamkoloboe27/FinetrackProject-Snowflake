@@ -1,0 +1,11 @@
+# Environnement de développement complet : dbt, documentation et outils
+# de qualité. Installation : make install (ou pip install -r requirements-dev.txt).
+-r requirements.txt
+-r requirements-docs.txt
+
+# Hooks git : lancent les contrôles de .pre-commit-config.yaml avant chaque commit.
+pre-commit==4.7.0
+# Lint SQL. Même version que le hook sqlfluff-lint de .pre-commit-config.yaml.
+sqlfluff==4.4.0
+# Lint YAML. Même version que le hook yamllint de .pre-commit-config.yaml.
+yamllint==1.38.0

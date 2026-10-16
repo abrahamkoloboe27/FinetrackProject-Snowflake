@@ -1,0 +1,25 @@
+# Fichiers et dossiers ignorés par SQLFluff (même syntaxe que .gitignore).
+# SQLFluff ne contrôle que models/, tests/ et analyses/.
+
+# Scripts Snowsight exécutés à la main (rôles, droits, tables RAW, données) :
+# du SQL Snowflake brut, hors dbt, qui ne suit pas les conventions des modèles.
+snowflake/
+
+# Macros : du Jinja pur. Le templater jinja les rend vides, il n'y a donc
+# pas de SQL à analyser. Les espaces et fins de fichier y sont contrôlés par
+# les hooks pre-commit-hooks.
+macros/
+
+# Snapshots : la balise {% snapshot %} n'est connue que de dbt, le templater
+# jinja ne sait pas la rendre.
+snapshots/
+
+# Fichiers générés ou installés par dbt : SQL compilé, paquets, journaux.
+target/
+dbt_packages/
+logs/
+
+# Environnements Python et site de documentation généré.
+.venv/
+venv/
+site/
