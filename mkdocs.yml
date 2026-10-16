@@ -1,0 +1,114 @@
+# Site de documentation de l'équipe (MkDocs Material), publié sur GitHub Pages
+# par le workflow Docs (.github/workflows/docs.yml).
+#
+#   make docs         construit le site en mode strict (comme la CI)
+#   make docs-serve   le sert en local sur http://127.0.0.1:8000
+#
+# Le catalogue dbt (lineage, colonnes, tests) est généré par dbt et publié
+# sous /dbt/ par le même workflow : il n'existe pas en local, d'où le lien
+# absolu dans la navigation.
+
+site_name: FinTrack Analytics
+site_description: >-
+  Entrepôt de données Snowflake + dbt de FinTrack Analytics : modèles,
+  qualité des données, workflow d'équipe et CI/CD.
+site_url: https://abrahamkoloboe27.github.io/FinetrackProject-Snowflake/
+repo_name: abrahamkoloboe27/FinetrackProject-Snowflake
+repo_url: https://github.com/abrahamkoloboe27/FinetrackProject-Snowflake
+# le bouton « Modifier » ouvre la page sur la branche d'intégration
+edit_uri: edit/dev/docs/
+
+theme:
+  name: material
+  language: fr
+  icon:
+    repo: fontawesome/brands/github
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.action.edit
+    - content.tabs.link
+  palette:
+    - media: "(prefers-color-scheme)"
+      toggle:
+        icon: material/brightness-auto
+        name: Passer en mode clair
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Passer en mode sombre
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Suivre le thème du système
+
+plugins:
+  - search:
+      lang: fr
+
+# Publie les captures de assets/ (racine du dépôt) sur le site, sans copie
+hooks:
+  - docs/hooks/captures.py
+exclude_docs: |
+  /hooks/
+watch:
+  - assets
+
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+
+# Toute anomalie de lien devient un avertissement, donc une erreur avec --strict
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn
+
+nav:
+  - Accueil: index.md
+  - Démarrer:
+      - Démarrage: demarrage.md
+      - Contribuer: contribuer.md
+  - Projet:
+      - Architecture: architecture.md
+      - Modèles: modeles.md
+      - Qualité des données: qualite.md
+      - Conventions: conventions.md
+  - Équipe et CI/CD:
+      - Workflow Git: workflow-git.md
+      - Environnements: environnements.md
+      - CI/CD: ci-cd.md
+      - Secrets: secrets.md
+      - Runbooks: runbooks.md
+  - FAQ: faq.md
+  - Catalogue dbt: https://abrahamkoloboe27.github.io/FinetrackProject-Snowflake/dbt/
