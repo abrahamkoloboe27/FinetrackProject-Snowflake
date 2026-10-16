@@ -1,0 +1,279 @@
+# CD : déploie le projet dbt après chaque fusion sur une branche d'environnement.
+#   push sur dev     → environnement GitHub « dev »     → target dbt dev     (DEV_STAGING, DEV_MARTS)
+#   push sur staging → environnement GitHub « staging » → target dbt staging (PREPROD_STAGING, PREPROD_MARTS)
+#   push sur main    → environnement GitHub « prod »    → target dbt prod    (STAGING, MARTS)
+# Sur main, en plus :
+#   - le manifest de prod est publié (artefact dbt-manifest-prod) pour la Slim CI ;
+#   - une release vX.Y.Z est créée si la version de dbt_project.yml est nouvelle ;
+#   - sync-check signale un back-merge à faire (commits présents sur main
+#     mais absents de staging ou dev, typiquement après un hotfix).
+# Le workflow « Docs » se déclenche à la fin d'un CD réussi sur main.
+# Lancement manuel (workflow_dispatch) : redéploie l'environnement de la
+# branche choisie ; toute autre branche que dev, staging ou main est refusée.
+name: CD
+
+on:
+  push:
+    branches: [dev, staging, main]
+    # Un changement de documentation seule ne redéploie pas les modèles.
+    paths-ignore:
+      - docs/**
+      - "**/*.md"
+      - mkdocs.yml
+      - requirements-docs.txt
+      - assets/**
+      - .github/ISSUE_TEMPLATE/**
+      - .github/pull_request_template.md
+      - .github/CODEOWNERS
+  workflow_dispatch:
+
+# Un déploiement par branche à la fois, jamais interrompu en cours de route.
+# Le job deploy est en plus sérialisé avec le run planifié de la prod (groupe
+# dbt-deploy-<environnement>, voir ce job).
+concurrency:
+  group: cd-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12"
+  DBT_PROFILES_DIR: ${{ github.workspace }}/ci
+  DBT_SEND_ANONYMOUS_USAGE_STATS: "false"
+
+jobs:
+  resolve:
+    name: Résoudre l'environnement
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      environment: ${{ steps.resolve.outputs.environment }}
+      target: ${{ steps.resolve.outputs.target }}
+    steps:
+      - name: Branche → environnement et target dbt
+        id: resolve
+        env:
+          BRANCH: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          if [ "$REF_TYPE" != "branch" ]; then
+            echo "::error title=Déploiement refusé::Le CD ne se lance que depuis une branche (dev, staging ou main)."
+            exit 1
+          fi
+          case "$BRANCH" in
+            dev)     environment=dev;     target=dev ;;
+            staging) environment=staging; target=staging ;;
+            main)    environment=prod;    target=prod ;;
+            *)
+              echo "::error title=Déploiement refusé::La branche « ${BRANCH} » n'a pas d'environnement." \
+                "Lancez le CD depuis dev, staging ou main."
+              exit 1
+              ;;
+          esac
+          {
+            echo "environment=${environment}"
+            echo "target=${target}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Branche ${BRANCH} → environnement ${environment}, target dbt ${target}."
+
+  deploy:
+    name: Deploy (${{ needs.resolve.outputs.environment }})
+    needs: resolve
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # Même groupe que le job « dbt build (prod) » de « Scheduled prod run »
+    # (dbt-deploy-prod) : jamais deux dbt build de la prod en même temps.
+    # Limite de GitHub : un seul job en attente par groupe ; un nouveau venu
+    # annule celui qui attendait (voir docs/ci-cd.md).
+    concurrency:
+      group: dbt-deploy-${{ needs.resolve.outputs.environment }}
+      cancel-in-progress: false
+    # Les secrets d'un environnement GitHub de même nom (ex. utilisateur de
+    # déploiement, voir docs/secrets.md « Séparer la CI de la production »)
+    # remplacent ceux du dépôt pour ce job.
+    environment:
+      name: ${{ needs.resolve.outputs.environment }}
+    env:
+      SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+      SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
+      SNOWFLAKE_PASSWORD: ${{ secrets.SNOWFLAKE_PASSWORD }}
+      SNOWFLAKE_PRIVATE_KEY: ${{ secrets.SNOWFLAKE_PRIVATE_KEY }}
+      SNOWFLAKE_PRIVATE_KEY_PASSPHRASE: ${{ secrets.SNOWFLAKE_PRIVATE_KEY_PASSPHRASE }}
+      SNOWFLAKE_ROLE: ${{ secrets.SNOWFLAKE_ROLE || 'FINTRACK_ROLE' }}
+      SNOWFLAKE_WAREHOUSE: ${{ secrets.SNOWFLAKE_WAREHOUSE || 'FINTRACK_WH' }}
+      SNOWFLAKE_DATABASE: ${{ secrets.SNOWFLAKE_DATABASE || 'FINTRACK_DB' }}
+      DBT_TARGET: ${{ needs.resolve.outputs.target }}
+      DBT_QUERY_TAG: github-cd-${{ needs.resolve.outputs.environment }}-${{ github.run_id }}
+      DEPLOY_ENV: ${{ needs.resolve.outputs.environment }}
+    steps:
+      # Une relance (« Re-run jobs ») garde le commit d'origine. Si la branche
+      # a avancé depuis, elle redéploierait du code périmé par-dessus un
+      # déploiement plus récent : refusée. Au premier essai, la concurrence
+      # garantit déjà que ce run est le plus récent.
+      - name: Refuser le redéploiement d'un commit périmé
+        if: github.run_attempt != '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          tip="$(gh api "repos/${GITHUB_REPOSITORY}/branches/${BRANCH}" --jq .commit.sha)"
+          if [ "$tip" != "$GITHUB_SHA" ]; then
+            echo "::error title=Relance refusée::${BRANCH} est maintenant en ${tip:0:7} ;" \
+              "cette exécution déploierait ${GITHUB_SHA:0:7}. Redéployez avec gh workflow run cd.yml --ref ${BRANCH}."
+            exit 1
+          fi
+          echo "${BRANCH} est toujours en ${GITHUB_SHA:0:7} : relance autorisée."
+
+      - name: Récupérer le code
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Vérifier les secrets Snowflake
+        run: bash scripts/ci/check_snowflake_env.sh --strict
+
+      - name: Installer Python et dbt
+        uses: ./.github/actions/setup-dbt
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      # --log-level-file none : dbt debug affiche le compte et l'utilisateur ;
+      # logs/dbt.log est publié en artefact (dépôt public) et GitHub ne masque
+      # les secrets que dans la console.
+      - name: dbt debug
+        run: dbt debug --target "$DBT_TARGET" --log-level-file none
+
+      - name: dbt build
+        run: dbt build --target "$DBT_TARGET"
+
+      - name: Résumé dbt
+        if: ${{ !cancelled() }}
+        run: python3 scripts/ci/dbt_summary.py "Déploiement ${DEPLOY_ENV} (target ${DBT_TARGET})"
+
+      # Défense en profondeur : une erreur de connexion pendant le build
+      # écrit l'URL du compte dans logs/dbt.log.
+      - name: Masquer compte et utilisateur dans les artefacts
+        if: ${{ !cancelled() }}
+        run: python3 scripts/ci/redact_artifacts.py
+
+      - name: Publier les artefacts dbt
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: dbt-artifacts-${{ needs.resolve.outputs.environment }}
+          path: |
+            target/manifest.json
+            target/run_results.json
+            logs/dbt.log
+          retention-days: 30
+          if-no-files-found: ignore
+          overwrite: true
+
+      # Référence pour la Slim CI : uniquement après un build de prod réussi.
+      - name: Publier le manifest de prod (Slim CI)
+        if: needs.resolve.outputs.environment == 'prod'
+        uses: actions/upload-artifact@v7
+        with:
+          name: dbt-manifest-prod
+          path: target/manifest.json
+          retention-days: 90
+          if-no-files-found: error
+          overwrite: true
+
+  release:
+    name: Release
+    needs: [resolve, deploy]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write  # création du tag et de la release
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Lire la version du projet
+        id: version
+        run: |
+          pattern="s/^version:[[:space:]]*['\"]?([^'\"[:space:]#]+)['\"]?.*$/\1/p"
+          version="$(sed -nE "$pattern" dbt_project.yml | head -n 1)"
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error title=Version illisible::dbt_project.yml : version 'X.Y.Z' attendue (lu : « ${version} »)."
+            exit 1
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "Version du projet : ${version}"
+
+      # Idempotent : une version déjà publiée ne crée rien (relance, ou
+      # fusion sur main sans changement de version).
+      - name: Créer la release si la version est nouvelle
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: v${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          status=0
+          gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" --silent 2> gh_error.txt || status=$?
+          if [ "$status" -eq 0 ]; then
+            echo "::notice title=Release::Le tag ${TAG} existe déjà : version inchangée, pas de release."
+            echo "Version ${TAG} déjà publiée : pas de nouvelle release." >> "$GITHUB_STEP_SUMMARY"
+          elif grep -q "HTTP 404" gh_error.txt; then
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --title "$TAG" --generate-notes
+            echo "::notice title=Release::Release ${TAG} créée sur ${GITHUB_SHA}."
+            url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
+            echo "Release **${TAG}** créée : ${url}" >> "$GITHUB_STEP_SUMMARY"
+          else
+            cat gh_error.txt >&2
+            exit 1
+          fi
+
+  sync-check:
+    name: Sync check
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Récupérer tout l'historique
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Après un hotfix fusionné sur main, ses commits manquent sur staging
+      # et dev : la prochaine release les écraserait ou créerait des conflits.
+      - name: Comparer main avec staging et dev
+        run: |
+          set -euo pipefail
+          late=()
+          for branch in staging dev; do
+            if ! git rev-parse --verify --quiet "refs/remotes/origin/${branch}" > /dev/null; then
+              echo "::notice title=Sync check::La branche ${branch} n'existe pas encore."
+              continue
+            fi
+            commits="$(git log --oneline --no-merges "origin/${branch}..origin/main")"
+            if [ -n "$commits" ]; then
+              count="$(printf '%s\n' "$commits" | wc -l | tr -d ' ')"
+              late+=("$branch")
+              echo "::warning title=Back-merge nécessaire::${count} commit(s) de main absents de ${branch}." \
+                "Ouvrez une PR main → staging puis staging → dev (merge commit)."
+              {
+                echo "### main → ${branch} : ${count} commit(s) à reporter"
+                echo
+                echo '```'
+                printf '%s\n' "$commits" | head -n 50
+                echo '```'
+                echo
+              } >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
+          if [ "${#late[@]}" -eq 0 ]; then
+            echo "staging et dev contiennent tous les commits de main."
+            echo "Branches synchronisées : rien à reporter." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "**Back-merge main → staging → dev nécessaire** (après un hotfix)." >> "$GITHUB_STEP_SUMMARY"
+          fi

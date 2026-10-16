@@ -1,0 +1,251 @@
+# CI : contrôle chaque pull request vers dev, staging ou main.
+#   - Lint            : hooks pre-commit (sqlfluff, yamllint, shellcheck, actionlint...)
+#   - dbt parse       : le projet se charge, sans connexion à Snowflake
+#   - Docs build      : le site MkDocs se construit en mode strict
+#   - dbt build (CI)  : construit et teste les modèles dans des schémas
+#                       jetables CI_PR_<numéro>_* (supprimés par « CI cleanup »).
+#                       Vers dev : Slim CI (modèles modifiés + descendants, le
+#                       reste est lu en prod grâce au manifest du dernier CD).
+# Les noms des jobs sont les status checks exigés par les rulesets : ne pas
+# les renommer sans mettre à jour .github/rulesets/*.json.
+name: CI
+# Le nom de chaque exécution retient la branche cible : « PR policy » vérifie
+# ainsi, quand la base d'une PR change, que la CI a tourné pour cette base.
+run-name: "CI base=${{ github.base_ref }} PR #${{ github.event.pull_request.number }}"
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    branches: [dev, staging, main]
+
+# Un nouveau push sur la PR annule le run en cours.
+concurrency:
+  group: ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12"
+  DBT_PROFILES_DIR: ${{ github.workspace }}/ci
+  DBT_SEND_ANONYMOUS_USAGE_STATS: "false"
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Installer Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      # Seul pre-commit est nécessaire : chaque hook installe son propre
+      # environnement. La version vient de requirements-dev.txt.
+      - name: Installer pre-commit
+        run: |
+          requirement="$(grep -E '^pre-commit==' requirements-dev.txt || echo pre-commit)"
+          python -m pip install --disable-pip-version-check "$requirement"
+
+      - name: Restaurer le cache pre-commit
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ hashFiles('.pre-commit-config.yaml') }}
+
+      - name: pre-commit run --all-files
+        run: pre-commit run --all-files --show-diff-on-failure --color always
+
+  dbt-parse:
+    name: dbt parse
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Valeurs factices et non vides : parse et ls n'ouvrent aucune connexion,
+    # mais le profil exige account et user.
+    env:
+      DBT_TARGET: ci
+      DBT_CI_SCHEMA: CI_PR_${{ github.event.pull_request.number }}
+      SNOWFLAKE_ACCOUNT: ci-offline
+      SNOWFLAKE_USER: ci-offline
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Installer Python et dbt
+        uses: ./.github/actions/setup-dbt
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: dbt parse
+        run: dbt parse --target ci --warn-error --no-partial-parse
+
+      - name: dbt ls
+        run: dbt ls --target ci
+
+      # La target prod n'est construite qu'au déploiement de main. Ce contrôle
+      # hors ligne vérifie dès la PR que la prod écrit toujours dans STAGING et
+      # MARTS : une coquille dans generate_schema_name ou dans +schema créerait
+      # sinon un nouveau schéma en prod, sans erreur (FINTRACK_ROLE a CREATE SCHEMA).
+      - name: Schémas de production
+        run: |
+          set -euo pipefail
+          unexpected="$(dbt ls --target prod --resource-type model \
+            --exclude config.materialized:ephemeral \
+            --output json --output-keys name schema -q \
+            | jq -r 'select(.schema != "STAGING" and .schema != "MARTS") | "\(.name) -> \(.schema)"')"
+          if [ -n "$unexpected" ]; then
+            echo "::error title=Schémas de production::En prod, ces modèles sortiraient de STAGING/MARTS :" \
+              "${unexpected//$'\n'/, }"
+            exit 1
+          fi
+          echo "Target prod : tous les modèles écrivent dans STAGING ou MARTS."
+
+  docs:
+    name: Docs build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      NO_MKDOCS_2_WARNING: "true"
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Installer Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements-docs.txt
+
+      - name: Installer MkDocs
+        run: python -m pip install --disable-pip-version-check -r requirements-docs.txt
+
+      - name: mkdocs build --strict
+        run: mkdocs build --strict
+
+  dbt-build:
+    name: dbt build (CI)
+    needs: dbt-parse
+    # Ignoré (et donc considéré comme réussi) pour :
+    #   - une PR en brouillon : relancé au passage « Ready for review » ;
+    #   - une PR venant d'un fork : les secrets n'y sont pas disponibles ;
+    #   - une PR Dependabot : elle ne voit que les secrets Dependabot.
+    if: >-
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read  # gh run list / gh run download (manifest de prod)
+    env:
+      SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+      SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
+      SNOWFLAKE_PASSWORD: ${{ secrets.SNOWFLAKE_PASSWORD }}
+      SNOWFLAKE_PRIVATE_KEY: ${{ secrets.SNOWFLAKE_PRIVATE_KEY }}
+      SNOWFLAKE_PRIVATE_KEY_PASSPHRASE: ${{ secrets.SNOWFLAKE_PRIVATE_KEY_PASSPHRASE }}
+      SNOWFLAKE_ROLE: ${{ secrets.SNOWFLAKE_ROLE || 'FINTRACK_ROLE' }}
+      SNOWFLAKE_WAREHOUSE: ${{ secrets.SNOWFLAKE_WAREHOUSE || 'FINTRACK_WH' }}
+      SNOWFLAKE_DATABASE: ${{ secrets.SNOWFLAKE_DATABASE || 'FINTRACK_DB' }}
+      DBT_TARGET: ci
+      DBT_CI_SCHEMA: CI_PR_${{ github.event.pull_request.number }}
+      DBT_QUERY_TAG: github-ci-pr-${{ github.event.pull_request.number }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      BASE_REF: ${{ github.base_ref }}
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Vérifier les secrets Snowflake
+        run: bash scripts/ci/check_snowflake_env.sh --strict
+
+      - name: Installer Python et dbt
+        uses: ./.github/actions/setup-dbt
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      # --log-level-file none : dbt debug affiche le compte et l'utilisateur ;
+      # logs/dbt.log est publié en artefact (dépôt public) et GitHub ne masque
+      # les secrets que dans la console.
+      - name: dbt debug
+        run: dbt debug --target ci --log-level-file none
+
+      # Slim CI (PR vers dev uniquement) : manifest du dernier déploiement
+      # de prod réussi (workflow CD sur main). Absent ou expiré : build complet.
+      - name: Récupérer le manifest de prod (Slim CI)
+        id: prod-state
+        if: github.base_ref == 'dev'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          run_id="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow cd.yml --branch main \
+            --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty' || true)"
+          if [ -z "$run_id" ]; then
+            echo "::notice title=Slim CI::Aucun déploiement de prod réussi trouvé : build complet."
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if gh run download "$run_id" --repo "$GITHUB_REPOSITORY" -n dbt-manifest-prod -D prod-state \
+            && [ -f prod-state/manifest.json ]; then
+            echo "Manifest de prod récupéré (run CD ${run_id})."
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice title=Slim CI::Artefact dbt-manifest-prod absent ou expiré (run ${run_id}) : build complet."
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: dbt build
+        env:
+          STATE_AVAILABLE: ${{ steps.prod-state.outputs.available }}
+        run: |
+          if [ "$STATE_AVAILABLE" = "true" ]; then
+            echo "Slim CI : modèles modifiés et leurs descendants, le reste est lu en prod (--defer --favor-state)."
+            # --favor-state : un modèle non sélectionné est toujours lu en prod,
+            # même si un push précédent de la PR l'a construit dans CI_PR_<n>_*
+            # (sans ce flag, dbt lirait cette copie, peut-être périmée).
+            dbt build --target ci --select state:modified+ --defer --favor-state --state prod-state
+          else
+            echo "Build complet vers ${BASE_REF}."
+            dbt build --target ci
+          fi
+
+      - name: Résumé dbt
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/ci/dbt_summary.py "dbt build (CI) - PR #${PR_NUMBER}"
+
+      # Défense en profondeur : une erreur de connexion pendant le build
+      # écrit l'URL du compte dans logs/dbt.log (artefact public).
+      - name: Masquer compte et utilisateur dans les artefacts
+        if: ${{ !cancelled() }}
+        run: python3 scripts/ci/redact_artifacts.py
+
+      - name: Publier les artefacts dbt
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: dbt-ci-pr-${{ github.event.pull_request.number }}
+          path: |
+            target/run_results.json
+            target/manifest.json
+            logs/dbt.log
+          retention-days: 7
+          if-no-files-found: ignore
+          overwrite: true  # relance du job : remplace l'artefact précédent

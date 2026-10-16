@@ -1,0 +1,71 @@
+name: Bug / anomalie de données
+description: Un modèle échoue, un test casse ou un chiffre semble faux.
+title: "fix: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Merci de signaler l'anomalie. Ne collez **aucun secret** (mot de passe, clé privée)
+        ni donnée personnelle réelle : un extrait anonymisé suffit.
+
+  - type: dropdown
+    id: environnement
+    attributes:
+      label: Environnement
+      description: Où l'anomalie a-t-elle été constatée ?
+      options:
+        - prod (STAGING / MARTS)
+        - staging (PREPROD_*)
+        - dev (DEV_*)
+        - CI d'une PR (CI_PR_*)
+        - local (DEV_<PRENOM>_*)
+    validations:
+      required: true
+
+  - type: input
+    id: modele
+    attributes:
+      label: Modèle ou test concerné
+      placeholder: ex. mart_solde_mensuel, assert_solde_mensuel_positif
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: Ce qui ne va pas, en une ou deux phrases.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Comment reproduire
+      description: Commande dbt, requête SQL de vérification, lien vers le run GitHub Actions.
+      render: sql
+
+  - type: textarea
+    id: attendu
+    attributes:
+      label: Résultat attendu
+    validations:
+      required: true
+
+  - type: textarea
+    id: obtenu
+    attributes:
+      label: Résultat obtenu
+      description: Message d'erreur, valeurs observées.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: verifications
+    attributes:
+      label: Vérifications
+      options:
+        - label: Je n'ai collé aucun secret ni donnée personnelle réelle.
+          required: true
+        - label: J'ai vérifié que l'anomalie n'est pas déjà signalée.

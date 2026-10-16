@@ -1,0 +1,10 @@
+# Formulaires proposés à la création d'une issue. Les issues vierges sont
+# désactivées : chaque demande suit un formulaire.
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation du projet
+    url: https://abrahamkoloboe27.github.io/FinetrackProject-Snowflake/
+    about: Démarrage, environnements, CI/CD, conventions et runbooks.
+  - name: Catalogue dbt (modèles, colonnes, lineage)
+    url: https://abrahamkoloboe27.github.io/FinetrackProject-Snowflake/dbt/
+    about: Description de chaque modèle et de ses tests.

@@ -1,0 +1,115 @@
+# CI cleanup : supprime les schémas Snowflake jetables de la CI (CI_PR_<n>_*).
+#   - PR fermée ou fusionnée     → schémas de cette PR (macro drop_ci_schemas, pr_number) ;
+#   - chaque lundi à 03:00 UTC   → schémas de toutes les PR qui ne sont plus
+#     ouvertes (keep_pr_numbers = PR ouvertes) : rattrape les oublis ;
+#   - lancement manuel           → idem, avec une option de simulation.
+# Sans secrets Snowflake, la CI n'a rien pu créer : le workflow s'arrête
+# proprement. Les PR venant de forks sont ignorées (aucun schéma créé).
+name: CI cleanup
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [dev, staging, main]
+  schedule:
+    - cron: "0 3 * * 1"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Simulation (liste les schémas sans les supprimer)
+        type: boolean
+        default: false
+
+# PR fermée : même groupe que la CI de cette PR (ci-<n>), avec annulation.
+# Un dbt build (CI) encore en cours est arrêté (dbt annule ses requêtes)
+# avant le DROP : il ne peut plus recréer les schémas après le nettoyage.
+# Cron et lancement manuel : groupe à part, sans annulation.
+concurrency:
+  group: >-
+    ${{ github.event_name == 'pull_request'
+    && format('ci-{0}', github.event.pull_request.number)
+    || format('ci-cleanup-{0}', github.event_name) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12"
+  DBT_PROFILES_DIR: ${{ github.workspace }}/ci
+  DBT_SEND_ANONYMOUS_USAGE_STATS: "false"
+
+jobs:
+  cleanup:
+    name: Nettoyer les schémas CI
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: read  # gh pr list (PR encore ouvertes)
+    env:
+      SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+      SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
+      SNOWFLAKE_PASSWORD: ${{ secrets.SNOWFLAKE_PASSWORD }}
+      SNOWFLAKE_PRIVATE_KEY: ${{ secrets.SNOWFLAKE_PRIVATE_KEY }}
+      SNOWFLAKE_PRIVATE_KEY_PASSPHRASE: ${{ secrets.SNOWFLAKE_PRIVATE_KEY_PASSPHRASE }}
+      SNOWFLAKE_ROLE: ${{ secrets.SNOWFLAKE_ROLE || 'FINTRACK_ROLE' }}
+      SNOWFLAKE_WAREHOUSE: ${{ secrets.SNOWFLAKE_WAREHOUSE || 'FINTRACK_WH' }}
+      SNOWFLAKE_DATABASE: ${{ secrets.SNOWFLAKE_DATABASE || 'FINTRACK_DB' }}
+      DBT_TARGET: ci
+      DBT_CI_SCHEMA: CI_CLEANUP
+      DBT_QUERY_TAG: github-ci-cleanup-${{ github.run_id }}
+      DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
+    steps:
+      # PR fermée : code de la branche cible (la référence de merge de la PR
+      # peut avoir disparu). Sinon : la branche du run (main pour le cron).
+      - name: Récupérer le code
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.base.ref || github.ref }}
+          persist-credentials: false
+
+      - name: Vérifier les secrets Snowflake
+        id: snowflake
+        run: bash scripts/ci/check_snowflake_env.sh --soft
+
+      - name: Rien à nettoyer
+        if: steps.snowflake.outputs.ready != 'true'
+        run: |
+          echo "::notice title=CI cleanup::Secrets Snowflake absents : la CI n'a créé aucun schéma, rien à supprimer."
+
+      - name: Installer Python et dbt
+        if: steps.snowflake.outputs.ready == 'true'
+        uses: ./.github/actions/setup-dbt
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Supprimer les schémas de la PR
+        if: steps.snowflake.outputs.ready == 'true' && github.event_name == 'pull_request'
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          echo "Suppression des schémas CI_PR_${PR_NUMBER}_*."
+          dbt run-operation drop_ci_schemas --target ci --args "{pr_number: ${PR_NUMBER}}"
+
+      # Si la liste des PR ouvertes est illisible, le script s'arrête AVANT
+      # tout appel à dbt : une liste vide supprimerait tous les schémas CI.
+      - name: Supprimer les schémas des PR qui ne sont plus ouvertes
+        if: steps.snowflake.outputs.ready == 'true' && github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          open_prs="$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 1000 \
+            --json number --jq '[.[].number] | map(tostring) | join(", ")')"
+          if ! [[ "$open_prs" =~ ^([0-9]+(,\ [0-9]+)*)?$ ]]; then
+            echo "::error title=CI cleanup::Liste des PR ouvertes inattendue, nettoyage annulé."
+            exit 1
+          fi
+          echo "PR ouvertes conservées : [${open_prs}] (simulation : ${DRY_RUN})."
+          dbt run-operation drop_ci_schemas --target ci \
+            --args "{keep_pr_numbers: [${open_prs}], dry_run: ${DRY_RUN}}"

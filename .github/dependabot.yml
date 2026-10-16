@@ -1,0 +1,46 @@
+# Dependabot : mises à jour hebdomadaires des dépendances.
+# Les PR visent dev (jamais main) et suivent le flux normal de l'équipe.
+# Titres au format Conventional Commits : « chore(deps): bump ... ».
+# Remarque : une PR Dependabot ne reçoit pas les secrets Actions ; le job
+# « dbt build (CI) » est donc ignoré pour elle. Le build Snowflake a lieu
+# au déploiement sur dev.
+version: 2
+updates:
+  # Actions GitHub des workflows et de l'action composite setup-dbt.
+  - package-ecosystem: github-actions
+    directories:
+      - "/"
+      - "/.github/actions/setup-dbt"
+    target-branch: dev
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Paris
+    commit-message:
+      prefix: "chore(deps)"
+    labels: [dependencies]
+    open-pull-requests-limit: 5
+    groups:
+      github-actions:
+        patterns: ["*"]
+
+  # Paquets Python (requirements*.txt). dbt-core et dbt-snowflake sont mis
+  # à jour ensemble : leurs versions mineures doivent correspondre.
+  - package-ecosystem: pip
+    directory: "/"
+    target-branch: dev
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Paris
+    commit-message:
+      prefix: "chore(deps)"
+    labels: [dependencies]
+    open-pull-requests-limit: 5
+    groups:
+      dbt:
+        patterns: ["dbt-*"]
+      docs:
+        patterns: ["mkdocs*", "pymdown-extensions"]

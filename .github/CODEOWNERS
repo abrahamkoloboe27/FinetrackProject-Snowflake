@@ -1,0 +1,14 @@
+# Propriétaires du code : leur revue est demandée automatiquement sur
+# chaque pull request qui touche les fichiers listés. Sur main, le ruleset
+# exige l'approbation d'un propriétaire (require_code_owner_review).
+# La dernière règle qui correspond à un fichier l'emporte.
+# Pour ajouter un membre de l'équipe : « /models/ @abrahamkoloboe27 @login ».
+
+# Par défaut : tout le dépôt.
+*               @abrahamkoloboe27
+
+# Zones sensibles, listées explicitement.
+/.github/       @abrahamkoloboe27
+/scripts/       @abrahamkoloboe27
+/ci/            @abrahamkoloboe27
+/snowflake/     @abrahamkoloboe27

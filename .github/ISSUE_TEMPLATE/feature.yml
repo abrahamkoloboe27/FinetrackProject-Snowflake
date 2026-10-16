@@ -1,0 +1,64 @@
+name: Nouveau modèle / évolution
+description: Proposer un nouveau modèle, une colonne, un test ou une évolution du projet.
+title: "feat: "
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Décrivez le besoin métier avant la solution technique. La demande sera
+        discutée ici, puis réalisée dans une branche `feature/<sujet>` créée depuis `dev`.
+
+  - type: textarea
+    id: besoin
+    attributes:
+      label: Besoin métier
+      description: À quelle question doit-on pouvoir répondre ? Pour qui ?
+      placeholder: ex. Suivre l'épargne mensuelle par compte pour le tableau de bord « Épargne ».
+    validations:
+      required: true
+
+  - type: dropdown
+    id: couche
+    attributes:
+      label: Couche concernée
+      options:
+        - staging (nettoyage d'une source)
+        - intermediate (jointure, enrichissement)
+        - marts (modèle final pour la BI)
+        - tests / qualité des données
+        - CI/CD, outillage ou documentation
+    validations:
+      required: true
+
+  - type: textarea
+    id: sources
+    attributes:
+      label: Sources et modèles utilisés
+      description: Tables RAW ou modèles existants nécessaires.
+      placeholder: ex. stg_transactions, dim_comptes
+
+  - type: textarea
+    id: regles
+    attributes:
+      label: Règles de gestion
+      description: Grain, filtres, calculs, cas particuliers.
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptation
+    attributes:
+      label: Critères d'acceptation
+      description: Tests dbt attendus (unique, not_null, relationships...) et contrôles chiffrés.
+      placeholder: |
+        - une ligne par compte et par mois (test unique_combination_of_columns)
+        - montant_epargne jamais nul
+
+  - type: checkboxes
+    id: impact
+    attributes:
+      label: Impact
+      options:
+        - label: Change le schéma d'un modèle existant (colonne renommée ou supprimée).
+        - label: Nécessite une action dans Snowflake (droits, nouvelle source).
